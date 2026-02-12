@@ -21,7 +21,7 @@ import Link from "next/link";
 
 interface BookingFormProps {
   selectedSlot: string;
-  eventTypeId: string;
+  eventTypeId: number;
   eventLength: number; // in minutes
   userTimezone: string; // User's selected timezone
   onSuccess: (booking: CalcomBookingResponse) => void;

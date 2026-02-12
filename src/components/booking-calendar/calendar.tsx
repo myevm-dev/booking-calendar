@@ -7,7 +7,7 @@ import { useCalendarSlots } from "@/lib/booking-calendar/hooks/use-calendar-slot
 import { useIntersectionObserver } from "@/lib/booking-calendar/hooks/use-intersection-observer";
 
 interface CalendarProps {
-  eventTypeId: string;
+    eventTypeId: number;
   onSlotSelect: (slot: string) => void;
   title?: string;
   description?: string;

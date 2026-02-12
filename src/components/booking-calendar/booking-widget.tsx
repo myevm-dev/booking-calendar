@@ -1,3 +1,5 @@
+// /workspaces/booking-calendar/src/components/booking-calendar/booking-widget.tsx
+
 'use client';
 
 import { useState, useEffect, useRef } from 'react';
@@ -18,7 +20,7 @@ import { ErrorModal } from './modals/error-modal';
 type BookingStep = 'calendar' | 'form' | 'success' | 'reschedule' | 'cancelled';
 
 interface BookingWidgetProps {
-  eventTypeId: string;
+  eventTypeId: number;
   eventLength?: number; // in minutes, default 30
   title?: string;
   description?: string;
@@ -35,7 +37,13 @@ const BookingWidget: React.FC<BookingWidgetProps> = ({
   const [currentStep, setCurrentStep] = useState<BookingStep>('calendar');
   const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
   const [booking, setBooking] = useState<CalcomBookingResponse | null>(null);
+
+  // Hydration-safe timezone init:
+  // - Render a stable placeholder on server/first paint
+  // - Only render Calendar/Form once we know the user timezone
   const [userTimezone, setUserTimezone] = useState<string>('');
+  const [isClientReady, setIsClientReady] = useState(false);
+
   const [showCancelDialog, setShowCancelDialog] = useState(false);
   const [showRescheduleDialog, setShowRescheduleDialog] = useState(false);
   const [showErrorDialog, setShowErrorDialog] = useState(false);
@@ -52,17 +60,16 @@ const BookingWidget: React.FC<BookingWidgetProps> = ({
   const widgetRef = useRef<HTMLDivElement>(null);
   const hasUserInteracted = useRef(false);
 
-  // Initialize user timezone on component mount
+  // Initialize user timezone on component mount (client-only)
   useEffect(() => {
+    setIsClientReady(true);
     const browserTimezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
     setUserTimezone(browserTimezone);
   }, []);
 
   // Auto-scroll to widget when step changes due to user interaction
   useEffect(() => {
-    // Only scroll if user has interacted (not on initial page load)
     if (hasUserInteracted.current && widgetRef.current) {
-      // Small delay to ensure DOM has updated
       setTimeout(() => {
         if (widgetRef.current) {
           const headerHeight = 175; // Approximate header height
@@ -85,11 +92,10 @@ const BookingWidget: React.FC<BookingWidgetProps> = ({
       const interval = setInterval(() => {
         setCancelCountdown((prev) => {
           if (prev <= 1) {
-            // Reset to calendar view
             setCurrentStep('calendar');
             setBooking(null);
             setSelectedSlot(null);
-            return 5; // Reset countdown for next time
+            return 5;
           }
           return prev - 1;
         });
@@ -97,7 +103,7 @@ const BookingWidget: React.FC<BookingWidgetProps> = ({
 
       return () => clearInterval(interval);
     } else {
-      setCancelCountdown(5); // Reset countdown when not in cancelled state
+      setCancelCountdown(5);
     }
   }, [currentStep]);
 
@@ -110,7 +116,7 @@ const BookingWidget: React.FC<BookingWidgetProps> = ({
   const handleBookingSuccess = (bookingData: CalcomBookingResponse) => {
     hasUserInteracted.current = true;
     setBooking(bookingData);
-    setIsRescheduled(false); // This is a new booking
+    setIsRescheduled(false);
     setCurrentStep('success');
   };
 
@@ -129,7 +135,6 @@ const BookingWidget: React.FC<BookingWidgetProps> = ({
 
   const handleReschedule = () => {
     hasUserInteracted.current = true;
-    // Go back to calendar but keep the booking data for rescheduling
     setCurrentStep('reschedule');
   };
 
@@ -151,9 +156,7 @@ const BookingWidget: React.FC<BookingWidgetProps> = ({
 
       const response = await fetch('/api/booking-calendar/cancel', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(cancelData),
       });
 
@@ -177,7 +180,6 @@ const BookingWidget: React.FC<BookingWidgetProps> = ({
   };
 
   const handleRescheduleSlotSelect = (slot: string) => {
-    // Store the selected slot and show confirmation dialog
     setPendingRescheduleSlot(slot);
     setShowRescheduleDialog(true);
   };
@@ -196,9 +198,7 @@ const BookingWidget: React.FC<BookingWidgetProps> = ({
 
       const response = await fetch('/api/booking-calendar/reschedule', {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(rescheduleData),
       });
 
@@ -208,9 +208,10 @@ const BookingWidget: React.FC<BookingWidgetProps> = ({
 
       const result = await response.json();
       const updatedBooking = result.data || result;
+
       hasUserInteracted.current = true;
       setBooking(updatedBooking);
-      setIsRescheduled(true); // This is a reschedule
+      setIsRescheduled(true);
       setShowRescheduleDialog(false);
       setPendingRescheduleSlot(null);
       setCurrentStep('success');
@@ -227,9 +228,21 @@ const BookingWidget: React.FC<BookingWidgetProps> = ({
     }
   };
 
+  const tzReady = isClientReady && Boolean(userTimezone);
+
   return (
     <div ref={widgetRef} className="mx-auto w-full max-w-[760px]">
-      {currentStep === 'calendar' && (
+      {/* Hydration-safe placeholder while timezone initializes */}
+      {currentStep === 'calendar' && !tzReady && (
+        <div className="bg-neutral-900 rounded-2xl border border-neutral-700 shadow-xl">
+          <div className="p-6">
+            <div className="mb-4 h-6 w-48 rounded bg-neutral-800" />
+            <div className="h-72 w-full rounded bg-neutral-800" />
+          </div>
+        </div>
+      )}
+
+      {currentStep === 'calendar' && tzReady && (
         <Calendar
           eventTypeId={eventTypeId}
           onSlotSelect={handleSlotSelect}
@@ -241,7 +254,7 @@ const BookingWidget: React.FC<BookingWidgetProps> = ({
         />
       )}
 
-      {currentStep === 'form' && selectedSlot && (
+      {currentStep === 'form' && selectedSlot && tzReady && (
         <BookingForm
           selectedSlot={selectedSlot}
           eventTypeId={eventTypeId}
@@ -252,7 +265,7 @@ const BookingWidget: React.FC<BookingWidgetProps> = ({
         />
       )}
 
-      {currentStep === 'reschedule' && booking && (
+      {currentStep === 'reschedule' && booking && tzReady && (
         <Calendar
           eventTypeId={eventTypeId}
           onSlotSelect={handleRescheduleSlotSelect}
@@ -264,7 +277,7 @@ const BookingWidget: React.FC<BookingWidgetProps> = ({
         />
       )}
 
-      {currentStep === 'success' && booking && (
+      {currentStep === 'success' && booking && tzReady && (
         <BookingSuccess
           booking={booking}
           userTimezone={userTimezone}
@@ -292,10 +305,7 @@ const BookingWidget: React.FC<BookingWidgetProps> = ({
             <p className="mb-6 text-sm text-neutral-500">
               Returning to calendar in {cancelCountdown} seconds...
             </p>
-            <Button
-              onClick={handleNewBooking}
-              className="w-full max-w-sm"
-            >
+            <Button onClick={handleNewBooking} className="w-full max-w-sm">
               Book Another Meeting
             </Button>
           </div>

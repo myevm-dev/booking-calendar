@@ -19,7 +19,7 @@ export default function Home() {
       {/* NAVBAR */}
       <nav className="flex justify-between items-center px-6 py-4 border-b border-neutral-800">
         <div className="font-semibold text-lg">
-          My MVP
+          x402 Scheduler
         </div>
         <ConnectWalletButton />
       </nav>

@@ -308,6 +308,7 @@ const BookingWidget: React.FC<BookingWidgetProps> = ({
             <Button onClick={handleNewBooking} className="w-full max-w-sm">
               Book Another Meeting
             </Button>
+
           </div>
         </div>
       )}

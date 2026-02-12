@@ -30,11 +30,41 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
   onNewBooking,
   isRescheduled,
 }) => {
+  // Best-effort extraction of a join/conference link from Cal.com payloads
+  const getConferenceUrl = (b: CalcomBookingResponse): string | null => {
+    const anyBooking = b as any;
+
+    const url =
+      anyBooking?.location?.url ||
+      anyBooking?.location ||
+      anyBooking?.conferenceUrl ||
+      anyBooking?.meetingUrl ||
+      anyBooking?.videoCallUrl ||
+      anyBooking?.joinUrl ||
+      anyBooking?.data?.conferenceUrl ||
+      anyBooking?.data?.meetingUrl ||
+      anyBooking?.data?.joinUrl ||
+      anyBooking?.responses?.location?.value ||
+      anyBooking?.responses?.location ||
+      anyBooking?.booking?.location?.url ||
+      anyBooking?.booking?.location ||
+      null;
+
+    if (typeof url !== "string") return null;
+
+    // Allow https:// and data: (some providers) but block obvious non-urls
+    if (url.startsWith("http://") || url.startsWith("https://")) return url;
+    if (url.startsWith("data:")) return url;
+
+    return null;
+  };
+
+  const conferenceUrl = getConferenceUrl(booking);
+
   // Format the booking details in user's selected timezone
   const formatDateTime = (dateString: string) => {
     const date = new Date(dateString);
 
-    // Validate the date
     if (isNaN(date.getTime())) {
       console.error("Invalid date string:", dateString);
       return {
@@ -43,7 +73,6 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
       };
     }
 
-    // Use user's selected timezone for consistent formatting
     const dateStr = date.toLocaleDateString(undefined, {
       weekday: "long",
       year: "numeric",
@@ -51,12 +80,14 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
       day: "numeric",
       timeZone: userTimezone,
     });
+
     const timeStr = date.toLocaleTimeString(undefined, {
       hour: "numeric",
       minute: "2-digit",
       hour12: true,
       timeZone: userTimezone,
     });
+
     return { dateStr, timeStr };
   };
 
@@ -68,7 +99,6 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
     const startDate = new Date(booking.start);
     const endDate = new Date(booking.end);
 
-    // Validate dates before formatting
     if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
       console.error("Invalid date values:", {
         start: booking.start,
@@ -89,15 +119,14 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
     const startFormatted = formatDateForCalendar(startDate);
     const endFormatted = formatDateForCalendar(endDate);
 
-    // Create VCALENDAR content for Apple Calendar
     const vcalendarContent = `BEGIN:VCALENDAR
-      VERSION:2.0
-      BEGIN:VEVENT
-      DTSTART:${startFormatted}
-      DTEND:${endFormatted}
-      SUMMARY:${booking.title || "Meeting"}
-      END:VEVENT
-      END:VCALENDAR`;
+VERSION:2.0
+BEGIN:VEVENT
+DTSTART:${startFormatted}
+DTEND:${endFormatted}
+SUMMARY:${booking.title || "Meeting"}
+END:VEVENT
+END:VCALENDAR`;
 
     return {
       google: `https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&dates=${startFormatted}/${endFormatted}`,
@@ -185,7 +214,8 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
               href={calendarLinks.google}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex flex-1 items-center justify-center gap-1 rounded-lg border border-neutral-600 bg-neutral-800 px-3 py-2 text-xs font-medium text-neutral-200 transition-colors hover:bg-neutral-700">
+              className="flex flex-1 items-center justify-center gap-1 rounded-lg border border-neutral-600 bg-neutral-800 px-3 py-2 text-xs font-medium text-neutral-200 transition-colors hover:bg-neutral-700"
+            >
               Google
               <ExternalLink className="h-3 w-3" />
             </a>
@@ -194,7 +224,8 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
               href={calendarLinks.outlook}
               target="_blank"
               rel="noopener noreferrer"
-              className="flex flex-1 items-center justify-center gap-1 rounded-md border border-neutral-600 bg-neutral-800 px-3 py-2 text-xs font-medium text-neutral-200 transition-colors hover:bg-neutral-700">
+              className="flex flex-1 items-center justify-center gap-1 rounded-md border border-neutral-600 bg-neutral-800 px-3 py-2 text-xs font-medium text-neutral-200 transition-colors hover:bg-neutral-700"
+            >
               Outlook
               <ExternalLink className="h-3 w-3" />
             </a>
@@ -202,7 +233,8 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
             <a
               href={calendarLinks.apple}
               download={`${booking.title || "meeting"}.ics`}
-              className="flex flex-1 items-center justify-center gap-1 rounded-md border border-neutral-600 bg-neutral-800 px-3 py-2 text-xs font-medium text-neutral-200 transition-colors hover:bg-neutral-700">
+              className="flex flex-1 items-center justify-center gap-1 rounded-md border border-neutral-600 bg-neutral-800 px-3 py-2 text-xs font-medium text-neutral-200 transition-colors hover:bg-neutral-700"
+            >
               Apple
               <ExternalLink className="h-3 w-3" />
             </a>
@@ -211,26 +243,58 @@ export const BookingSuccess: React.FC<BookingSuccessProps> = ({
 
         {/* Actions */}
         <div className="space-y-3">
+          {/* Join / Conferencing */}
+          {conferenceUrl && (
+            <Button
+              type="button"
+              size="lg"
+              className="w-full h-12"
+              onClick={() =>
+                window.open(conferenceUrl, "_blank", "noopener,noreferrer")
+              }
+            >
+              Join meeting
+            </Button>
+          )}
+
+          {/* Optional: open Cal.com conferencing settings */}
+          <Button
+            type="button"
+            variant="outline"
+            className="w-full border-neutral-600"
+            onClick={() =>
+              window.open(
+                "https://app.cal.com/apps/installed?category=conferencing",
+                "_blank",
+                "noopener,noreferrer"
+              )
+            }
+          >
+            Open Cal.com conferencing settings
+          </Button>
+
           {/* Primary Actions */}
           <div className="flex gap-3">
             <Button
               onClick={onReschedule}
-              variant='outline'
-              className="flex flex-1 items-center justify-center gap-2 border-neutral-600">
+              variant="outline"
+              className="flex flex-1 items-center justify-center gap-2 border-neutral-600"
+            >
               <RotateCcw className="h-4 w-4" />
               Reschedule
             </Button>
             <Button
               onClick={onCancel}
-              variant='outline'
-              className="flex flex-1 items-center justify-center gap-2 border-neutral-600">
+              variant="outline"
+              className="flex flex-1 items-center justify-center gap-2 border-neutral-600"
+            >
               <X className="h-4 w-4" />
               Cancel
             </Button>
           </div>
 
           {/* Book Another Meeting */}
-          <Button onClick={onNewBooking} className="w-full h-12" size='lg'>
+          <Button onClick={onNewBooking} className="w-full h-12" size="lg">
             Book another meeting
           </Button>
         </div>

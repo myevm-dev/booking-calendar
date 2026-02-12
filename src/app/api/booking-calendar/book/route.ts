@@ -1,6 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
 import { applyRateLimit } from "@/lib/booking-calendar/utils/rate-limiting";
 
+import {
+  createPublicClient,
+  decodeEventLog,
+  formatUnits,
+  http,
+  parseAbiItem,
+} from "viem";
+import { base } from "viem/chains";
+
 interface BookingRequestV2 {
   start: string;
   attendee: {
@@ -13,6 +22,16 @@ interface BookingRequestV2 {
   metadata?: Record<string, string | number | boolean>;
   guests?: string[];
   bookingFieldsResponses?: Record<string, string | string[]>;
+}
+
+const transferEvent = parseAbiItem(
+  "event Transfer(address indexed from, address indexed to, uint256 value)"
+);
+
+function requireEnv(name: string): string {
+  const v = process.env[name];
+  if (!v) throw new Error(`Missing env: ${name}`);
+  return v;
 }
 
 export async function POST(request: NextRequest) {
@@ -42,24 +61,109 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // Read payment config from .env.local (server only)
+  let BASE_RPC_URL = "";
+  let PAYMENT_RECEIVER = "";
+  let USDC_BASE = "";
+  let PRICE_USDC = 0;
+
+  try {
+    BASE_RPC_URL = requireEnv("BASE_RPC_URL");
+    PAYMENT_RECEIVER = requireEnv("PAYMENT_RECEIVER").toLowerCase();
+    USDC_BASE = requireEnv("USDC_BASE").toLowerCase();
+    PRICE_USDC = Number(requireEnv("PRICE_USDC"));
+
+    if (!Number.isFinite(PRICE_USDC) || PRICE_USDC <= 0) {
+      return NextResponse.json(
+        { error: "PRICE_USDC must be a positive number" },
+        { status: 500 }
+      );
+    }
+  } catch (e) {
+    return NextResponse.json(
+      { error: e instanceof Error ? e.message : "Payment env misconfigured" },
+      { status: 500 }
+    );
+  }
+
+  const publicClient = createPublicClient({
+    chain: base,
+    transport: http(BASE_RPC_URL),
+  });
+
   try {
     const bookingData = await request.json();
 
     // Validate required fields
-    if (
-      !bookingData.eventTypeId ||
-      !bookingData.start ||
-      !bookingData.attendee
-    ) {
+    if (!bookingData.eventTypeId || !bookingData.start || !bookingData.attendee) {
       return NextResponse.json(
         { error: "Missing required booking data" },
         { status: 400 }
       );
     }
 
-    // Validate and parse eventTypeId
-    const eventTypeId = parseInt(bookingData.eventTypeId);
-    if (isNaN(eventTypeId) || eventTypeId <= 0) {
+    // Require payment proof (x402-style gate)
+    const paymentTxHash = bookingData.paymentTxHash as `0x${string}` | undefined;
+    if (!paymentTxHash) {
+      return NextResponse.json(
+        { error: "Payment required", details: "Missing paymentTxHash" },
+        { status: 402 }
+      );
+    }
+
+    // Verify payment tx on Base
+    const receipt = await publicClient.getTransactionReceipt({
+      hash: paymentTxHash,
+    });
+
+    if (receipt.status !== "success") {
+      return NextResponse.json(
+        { error: "Payment required", details: "Payment transaction failed" },
+        { status: 402 }
+      );
+    }
+
+    // Look for USDC Transfer logs to PAYMENT_RECEIVER
+    const usdcLogs = receipt.logs.filter(
+      (l) => l.address.toLowerCase() === USDC_BASE
+    );
+
+    let paidUSDC = 0;
+
+    for (const log of usdcLogs) {
+      try {
+        const decoded = decodeEventLog({
+          abi: [transferEvent],
+          data: log.data,
+          topics: log.topics,
+        });
+
+        if (decoded.eventName !== "Transfer") continue;
+
+        const to = (decoded.args as any).to as string;
+        const value = (decoded.args as any).value as bigint;
+
+        if (to.toLowerCase() === PAYMENT_RECEIVER) {
+          paidUSDC += Number(formatUnits(value, 6)); // USDC = 6 decimals
+        }
+      } catch {
+        // ignore non-matching logs
+      }
+    }
+
+    if (paidUSDC + 1e-9 < PRICE_USDC) {
+      return NextResponse.json(
+        {
+          error: "Payment required",
+          details: `Insufficient payment. Paid ${paidUSDC} USDC, need ${PRICE_USDC} USDC.`,
+        },
+        { status: 402 }
+      );
+    }
+
+    // Validate and parse eventTypeId safely
+    const eventTypeId = Number(bookingData.eventTypeId);
+    if (!Number.isFinite(eventTypeId) || eventTypeId <= 0) {
       return NextResponse.json(
         { error: "Invalid eventTypeId: must be a valid positive number" },
         { status: 400 }
@@ -71,7 +175,7 @@ export async function POST(request: NextRequest) {
       bookingData.metadata?.notes || "No additional notes provided"
     );
 
-    // Format the booking data for Cal.com v2 API
+    // Build Cal.com payload (do NOT forward paymentTxHash)
     const calcomBookingData: BookingRequestV2 = {
       start: bookingData.start,
       attendee: {
@@ -81,7 +185,6 @@ export async function POST(request: NextRequest) {
         language: "en",
       },
       eventTypeId,
-      // ALL form fields must go in bookingFieldsResponses for v2 API
       bookingFieldsResponses: {
         name: bookingData.attendee.name,
         email: bookingData.attendee.email,

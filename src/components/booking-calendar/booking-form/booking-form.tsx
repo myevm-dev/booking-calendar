@@ -3,14 +3,10 @@
 import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
-import { ArrowLeft } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Form } from "@/components/ui/form";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import type {
-  CalcomBookingRequest,
-  CalcomBookingResponse,
-} from "@/types/booking";
+import type { CalcomBookingRequest, CalcomBookingResponse } from "@/types/booking";
 import { calculateEndTime } from "@/lib/booking-calendar/utils/form-utils";
 import { bookingSchema, BookingFormData } from "./schemas";
 import { MeetingDetails } from "./meeting-details";
@@ -18,6 +14,9 @@ import { ContactSection } from "./contact-section";
 import { ReferralSection } from "./referral-section";
 import { GuestsSection } from "./guests-section";
 import Link from "next/link";
+
+// ✅ add this import (your existing file)
+import { payUsdcOnBase } from "@/lib/booking-calendar/x402/payUsdc";
 
 interface BookingFormProps {
   selectedSlot: string;
@@ -76,16 +75,41 @@ export const BookingForm: React.FC<BookingFormProps> = ({
         guests: guests.length > 0 ? guests : undefined,
       };
 
+      // =========================
+      // ✅ 1) PAY FIRST (USDC on Base)
+      // =========================
+      const usdc = process.env.NEXT_PUBLIC_USDC_BASE as `0x${string}` | undefined;
+      const to = process.env.NEXT_PUBLIC_PAYMENT_RECEIVER as
+        | `0x${string}`
+        | undefined;
+      const price = Number(process.env.NEXT_PUBLIC_PRICE_USDC);
+
+      if (!usdc || !to || !Number.isFinite(price) || price <= 0) {
+        throw new Error(
+          "Payment config missing. Set NEXT_PUBLIC_USDC_BASE, NEXT_PUBLIC_PAYMENT_RECEIVER, NEXT_PUBLIC_PRICE_USDC."
+        );
+      }
+
+      const { hash } = await payUsdcOnBase({
+        usdc,
+        to,
+        amount: price,
+      });
+
+      // =========================
+      // ✅ 2) THEN BOOK (include paymentTxHash)
+      // =========================
       const response = await fetch("/api/booking-calendar/book", {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(bookingData),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          ...bookingData,
+          paymentTxHash: hash,
+        }),
       });
 
       if (!response.ok) {
-        const errorData = await response.json();
+        const errorData = await response.json().catch(() => ({}));
         throw new Error(errorData.error || "Failed to create booking");
       }
 
@@ -107,7 +131,6 @@ export const BookingForm: React.FC<BookingFormProps> = ({
 
   return (
     <div className="bg-neutral-900 overflow-hidden rounded-2xl border border-neutral-800 shadow p-6">
-      {/* Meeting Details */}
       <div className="mb-8">
         <MeetingDetails
           selectedSlot={selectedSlot}
@@ -116,19 +139,12 @@ export const BookingForm: React.FC<BookingFormProps> = ({
         />
       </div>
 
-      {/* Booking Form */}
       <Form {...form}>
         <form onSubmit={form.handleSubmit(handleSubmit)} className="space-y-6">
-          {/* Contact Information */}
           <ContactSection control={form.control} />
-
-          {/* Referral Source */}
           <ReferralSection watch={form.watch} setValue={form.setValue} />
-
-          {/* Guests */}
           <GuestsSection guests={guests} onGuestsChange={setGuests} />
 
-          {/* Error Display */}
           {form.formState.errors.root && (
             <Alert className="border-red-500/20 bg-red-500/10">
               <AlertDescription className="text-red-400">
@@ -137,30 +153,33 @@ export const BookingForm: React.FC<BookingFormProps> = ({
             </Alert>
           )}
 
-          {/* Form Actions */}
           <div className="flex gap-3">
             <Button
               variant="outline"
-              size='lg'
+              size="lg"
+              type="button"
               onClick={onBack}
               className="flex-1 cursor-pointer h-12"
-              >
+            >
               Back
             </Button>
+
             <Button
               disabled={loading}
-              size='lg'
-              className="flex-1 cursor-pointer h-12">
+              size="lg"
+              type="submit"
+              className="flex-1 cursor-pointer h-12"
+            >
               {loading ? "Confirming..." : "Confirm"}
             </Button>
           </div>
 
-          {/* Privacy Policy Text */}
           <p className="text-center text-sm text-neutral-400">
             By sending, you agree to our{" "}
             <Link
               href="/privacy-policy"
-              className="font-medium text-neutral-200 underline hover:text-blue-400 transition-colors">
+              className="font-medium text-neutral-200 underline hover:text-blue-400 transition-colors"
+            >
               Privacy policy
             </Link>{" "}
             and the processing of your data.
